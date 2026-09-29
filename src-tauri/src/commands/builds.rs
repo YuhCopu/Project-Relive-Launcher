@@ -1,0 +1,403 @@
+use crate::commands::download::download_file;
+use std::io::Read;
+use std::path::PathBuf;
+use std::process::Stdio;
+use std::{ fs::File, os::windows::process::CommandExt };
+use sysinfo::{ System, SystemExt };
+use winapi::um::winbase::CREATE_SUSPENDED;
+use windows::Win32::Foundation::HWND;
+use windows::Win32::UI::Shell::ShellExecuteW;
+use windows::Win32::UI::WindowsAndMessaging::{ SW_HIDE, SW_SHOW };
+use windows::core::{ PCWSTR, w };
+
+use std::ffi::CString;
+use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[cfg(not(target_os = "windows"))]
+const CREATE_NO_WINDOW: u32 = 0;
+#[cfg(not(target_os = "windows"))]
+const CREATE_SUSPENDED: u32 = 0;
+
+#[tauri::command]
+pub async fn check_file_exists_and_size(path: &str, size: Option<u64>) -> Result<bool, String> {
+    let file_path = std::path::PathBuf::from(path);
+    if !file_path.exists() {
+        return Ok(false);
+    }
+
+    match size {
+        Some(expected_size) => {
+            let actual_size = match file_path.metadata() {
+                Ok(metadata) => metadata.len(),
+                Err(err) => {
+                    return Err(err.to_string());
+                }
+            };
+
+            Ok(actual_size == expected_size)
+        }
+        None => Ok(true),
+    }
+}
+
+#[tauri::command]
+pub async fn check_file_exists(path: &str) -> Result<bool, String> {
+    let file_path = std::path::PathBuf::from(path);
+
+    if !file_path.exists() {
+        return Ok(false);
+    }
+
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn search_for_version(path: &str) -> Result<Vec<String>, String> {
+    let mut file = File::open(path).map_err(|e| e.to_string())?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer).map_err(|e| e.to_string())?;
+
+    let pattern = [
+        0x2b, 0x00, 0x2b, 0x00, 0x46, 0x00, 0x6f, 0x00, 0x72, 0x00, 0x74, 0x00, 0x6e, 0x00, 0x69, 0x00,
+        0x74, 0x00, 0x65, 0x00, 0x2b, 0x00,
+    ];
+
+    let mut matches = Vec::new();
+    for (i, window) in buffer.windows(pattern.len()).enumerate() {
+        if window == pattern {
+            let _start = i.saturating_sub(32);
+            let end = (i + pattern.len() + 64).min(buffer.len());
+
+            let end_index = find_end(&buffer[i + pattern.len()..end]);
+            if let Some(end) = end_index {
+                let utf16_slice = unsafe {
+                    std::slice::from_raw_parts(
+                        buffer[i..i + pattern.len() + end].as_ptr() as *const u16,
+                        (pattern.len() + end) / 2
+                    )
+                };
+                let s = String::from_utf16_lossy(utf16_slice);
+                matches.push(s.trim_end_matches('\0').to_string());
+            }
+        }
+    }
+
+    Ok(matches)
+}
+
+fn find_end(data: &[u8]) -> Option<usize> {
+    let mut i = 0;
+    while i + 1 < data.len() {
+        if data[i] == 0 && data[i + 1] == 0 {
+            return Some(i);
+        }
+        i += 2;
+    }
+    None
+}
+
+pub fn run_elevated(exe: &str, params: &str, working_dir: Option<&str>) -> Result<(), String> {
+    let hwnd = HWND(std::ptr::null_mut());
+
+    let op = w!("runas");
+
+    fn to_utf16_z(s: &str) -> Vec<u16> {
+        use std::os::windows::ffi::OsStrExt;
+        std::ffi::OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+    }
+
+    let exe_w = to_utf16_z(exe);
+    let params_w = to_utf16_z(params);
+    let dir_w = working_dir.map(to_utf16_z);
+
+    let r = unsafe {
+        ShellExecuteW(
+            hwnd,
+            op,
+            windows::core::PCWSTR(exe_w.as_ptr()),
+            windows::core::PCWSTR(params_w.as_ptr()),
+            windows::core::PCWSTR(dir_w.as_ref().map_or(std::ptr::null(), |v| v.as_ptr())),
+            SW_SHOWNORMAL
+        )
+    };
+
+    let code = r.0 as isize;
+    if code <= 32 {
+        return Err(format!("ShellExecuteW failed with code {}", code));
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn launch(
+    code: String,
+    path: String,
+    extra_args: Vec<String>,
+    identity: String
+) -> Result<bool, String> {
+    use std::{ fs, path::PathBuf, process::Stdio };
+
+    let game_path = PathBuf::from(path);
+    if !game_path.is_absolute() {
+        return Err("game path must be absolute".to_string());
+    }
+
+    let mut game_dll = game_path.clone();
+    game_dll.push(
+        "Engine\\Binaries\\ThirdParty\\NVIDIA\\NVaftermath\\Win64\\GFSDK_Aftermath_Lib.x64.dll"
+    );
+
+    if game_dll.exists() {
+        let mut a = 0;
+        let max = 50;
+
+        loop {
+            match std::fs::remove_file(&game_dll) {
+                Ok(_) => {
+                    break;
+                }
+                Err(e) => {
+                    a += 1;
+                    if a >= max {
+                        return Err(format!("failed to remove gfsdk after {} attempts: {}", max, e));
+                    }
+                    if !game_dll.exists() {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+            }
+        }
+    }
+
+    let mut game_dll_dir = game_path.clone();
+    game_dll_dir.push("Engine\\Binaries\\ThirdParty\\NVIDIA\\NVaftermath\\Win64");
+
+    if !game_dll_dir.exists() {
+        if let Err(e) = std::fs::create_dir_all(&game_dll_dir) {
+            return Err(format!("failed to create dir for gfsdk: {}", e));
+        }
+    }
+
+    let mut game_real = game_path.clone();
+    game_real.push("Arc\\Arc.exe");
+    let mut fnlauncher = game_path.clone();
+    fnlauncher.push("FortniteGame\\Binaries\\Win64\\FortniteLauncher.exe");
+
+    let mut fnac = game_path.clone();
+    fnac.push("FortniteGame\\Binaries\\Win64\\FortniteClient-Win64-Shipping_BE.exe");
+
+    let exchange_arg = &format!("-AUTH_PASSWORD={}", code);
+    let arc_identity = &format!("-t={}", identity);
+
+    let mut fort_args = vec![
+        "-epicapp=Fortnite".to_string(),
+        "-epicenv=Prod".to_string(),
+        "-epiclocale=en-us".to_string(),
+        "-epicportal".to_string(),
+        "-nobe".to_string(),
+        "-nouac".to_string(),
+        "-nocodeguards".to_string(),
+        "-fromfl=eac".to_string(),
+        "-skippatchcheck".to_string(),
+        "-AUTH_LOGIN=".to_string(),
+        exchange_arg.clone(),
+        "-AUTH_TYPE=exchangecode".to_string(),
+        arc_identity.clone(),
+    ];
+
+    // Sensitive/installation-specific launcher tokens are intentionally not
+    // embedded in the application. Configure them in the host environment
+    // when the Project Relive backend requires them.
+    if let Ok(token) = std::env::var("RELIVE_FL_TOKEN") {
+        if !token.trim().is_empty() {
+            fort_args.push(format!("-fltoken={token}"));
+        }
+    }
+    if let Ok(token) = std::env::var("RELIVE_CALDERA_TOKEN") {
+        if !token.trim().is_empty() {
+            fort_args.push(format!("-caldera={token}"));
+        }
+    }
+
+    for arg in extra_args.iter() {
+        fort_args.push(arg.to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // use winreg::enums::*;
+        // use winreg::RegKey;
+
+        // let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+        // let ifeo_path =
+        //     r"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\FortniteClient.exe";
+
+        // if hklm.open_subkey(ifeo_path).is_err() {
+        //     let reg_exe = r"C:\Windows\System32\reg.exe";
+        //     let params = concat!(
+        //         "add \"HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\FortniteClient.exe\" ",
+        //         "/v MaxLoaderThreads /t REG_DWORD /d 1 /f"
+        //     );
+
+        //     run_elevated(reg_exe, params, None)?;
+        // }
+
+        let _game = std::process::Command
+            ::new(game_real)
+            .creation_flags(CREATE_NO_WINDOW)
+            .args(&fort_args)
+            .stdout(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Failed to start Project Relive: {}", e))?;
+
+        let _fnlauncherfr = std::process::Command
+            ::new(fnlauncher)
+            .creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED)
+            .args(&fort_args)
+            .stdout(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Failed to start Project Relive: {}", e))?;
+
+        let _ac = std::process::Command
+            ::new(fnac)
+            .creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED)
+            .args(&fort_args)
+            .stdout(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Failed to start Project Relive: {}", e))?;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _fn = std::process::Command
+            ::new(game_real)
+            .args(&fort_args)
+            .stdout(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Failed to start Project Relive: {}", e))?;
+
+        let _fnlauncherfr = std::process::Command
+            ::new(fnlauncher)
+            .args(&fort_args)
+            .stdout(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Failed to start Project Relive: {}", e))?;
+
+        let _ac = std::process::Command
+            ::new(fnac)
+            .args(&fort_args)
+            .stdout(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Failed to start Project Relive: {}", e))?;
+    }
+
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn exit_all() -> Result<(), String> {
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot,
+        Process32First,
+        Process32Next,
+        PROCESSENTRY32,
+        TH32CS_SNAPPROCESS,
+    };
+    use windows::Win32::System::Threading::{
+        OpenProcess,
+        TerminateProcess,
+        PROCESS_TERMINATE,
+        PROCESS_QUERY_INFORMATION,
+    };
+    use windows::Win32::Foundation::{ CloseHandle, HANDLE };
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    let target_processes = [
+        "FortniteClient-Win64-Shipping.exe",
+        "FortniteLauncher.exe",
+        "FortniteClient-Win64-Shipping_EAC.exe",
+        "FortniteClient-Win64-Shipping_BE.exe",
+        "EasyAntiCheat_EOS.exe",
+        "EpicWebHelper.exe",
+        "Arc.exe",
+    ];
+
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).map_err(|e|
+            format!("failed to create process snapshot: {}", e)
+        )?;
+
+        let mut entry = PROCESSENTRY32 {
+            dwSize: std::mem::size_of::<PROCESSENTRY32>() as u32,
+            ..Default::default()
+        };
+
+        if Process32First(snapshot, &mut entry).is_err() {
+            CloseHandle(snapshot);
+            return Err("failed to get first process".to_string());
+        }
+
+        let mut killed_count = 0;
+
+        loop {
+            let null_pos = entry.szExeFile
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(entry.szExeFile.len());
+
+            let utf16_slice: Vec<u16> = entry.szExeFile[..null_pos]
+                .iter()
+                .map(|&b| b as u16)
+                .collect();
+            let process_name = String::from_utf16_lossy(&utf16_slice);
+
+            if target_processes.iter().any(|&target| { process_name.eq_ignore_ascii_case(target) }) {
+                println!("found target process: {} (PID: {})", process_name, entry.th32ProcessID);
+
+                match OpenProcess(PROCESS_TERMINATE, false, entry.th32ProcessID) {
+                    Ok(process_handle) => {
+                        match TerminateProcess(process_handle, 1) {
+                            Ok(_) => {
+                                println!("killed: {} (PID: {})", process_name, entry.th32ProcessID);
+                                killed_count += 1;
+                            }
+                            Err(e) => {
+                                println!(
+                                    "failed to kill {} (PID: {}): {}",
+                                    process_name,
+                                    entry.th32ProcessID,
+                                    e
+                                );
+                            }
+                        }
+                        CloseHandle(process_handle);
+                    }
+                    Err(e) => {
+                        println!(
+                            "failed to open process {} (PID: {}): {}",
+                            process_name,
+                            entry.th32ProcessID,
+                            e
+                        );
+                    }
+                }
+            }
+
+            if Process32Next(snapshot, &mut entry).is_err() {
+                break;
+            }
+        }
+
+        CloseHandle(snapshot);
+    }
+
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+
+    Ok(())
+}
