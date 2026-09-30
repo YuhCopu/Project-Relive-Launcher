@@ -4,7 +4,7 @@ import React, { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { ArrowRight } from "lucide-react";
 import GlassContainer from "../components/Global/GlassContainer";
-import { open } from "@tauri-apps/plugin-shell";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useRoutingStore } from "@/zustand/RoutingStore";
 import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { useNavigate } from "react-router-dom";
@@ -91,7 +91,7 @@ const Login: React.FC = () => {
   const handleClick = () => {
     const authRoute = Routing.Routes.get("auth");
     if (authRoute?.url || RELIVE_CONFIG.authUrl) {
-      void open(authRoute?.url || RELIVE_CONFIG.authUrl);
+      void openUrl(authRoute?.url || RELIVE_CONFIG.authUrl);
       return;
     }
 

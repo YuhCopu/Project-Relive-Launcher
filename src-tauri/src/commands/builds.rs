@@ -225,7 +225,7 @@ pub fn launch(
     }
 
     for arg in extra_args.iter() {
-        fort_args.push(arg.to_string());
+        fort_args.push(arg);
     }
 
     #[cfg(target_os = "windows")]

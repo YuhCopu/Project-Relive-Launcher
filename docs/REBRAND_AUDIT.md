@@ -45,6 +45,12 @@ The launcher uses local development/demo behavior when service configuration is 
 
 Repository text, source, configuration, filenames, and lockfiles were searched for the old launcher name and scheme. No old-brand occurrences remain in the delivered project.
 
+## UI customization
+
+- Navigation is a persisted Zustand store with Left/Bottom/Top floating modes, sizing, opacity, blur, spacing, tooltips, and optional auto-hide.
+- Theme presets include 23 built-in identities plus live custom editing and JSON import/export.
+- Page layout spacing is centralized in `LauncherLayout` rather than hardcoded per page.
+
 ## Build note
 
 The project contains the normal npm and Tauri build scripts. Dependency installation could not be completed in the packaging environment because `npm install` exceeded the available execution window, so a clean `npm run build`/Tauri compilation could not be independently executed here.

@@ -4,7 +4,7 @@ import Particles from "./components/Core/Particles";
 import Frame from "./components/Core/Frame";
 import "./index.css";
 import Login from "./pages/Login";
-import Sidebar from "./components/Core/Sidebar";
+import LauncherLayout from "./components/Core/LauncherLayout";
 import Home from "./pages/Home";
 import Library from "./pages/Library";
 import Settings from "./pages/Settings";
@@ -43,15 +43,20 @@ const App = () => {
 
       <Frame />
       <Particles quantity={85} />
-      {location.pathname !== "/" && <Sidebar />}
-
-      <Routes>
-        <Route path="/" element={<Login />} />
-        <Route path="/home" element={<Home />} />
-        <Route path="/library" element={<Library />} />
-        <Route path="/settings" element={<Settings />} />
-        <Route path="/leaderboards" element={<Leaderboards />} />
-      </Routes>
+      {location.pathname !== "/" ? (
+        <LauncherLayout>
+          <Routes>
+            <Route path="/home" element={<Home />} />
+            <Route path="/library" element={<Library />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="/leaderboards" element={<Leaderboards />} />
+          </Routes>
+        </LauncherLayout>
+      ) : (
+        <Routes>
+          <Route path="/" element={<Login />} />
+        </Routes>
+      )}
 
       <ToastContainer toasts={toasts} onClose={removeToast} />
     </>

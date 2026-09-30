@@ -2,7 +2,7 @@ import React from "react";
 import { motion } from "framer-motion";
 import GlassContainer from "../Global/GlassContainer";
 import { Heart } from "lucide-react";
-import { open } from "@tauri-apps/plugin-shell";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { RELIVE_CONFIG } from "@/config";
 
 const genStar = () => ({
@@ -71,7 +71,7 @@ const Donate: React.FC = () => {
         <button
           onClick={() => {
             if (RELIVE_CONFIG.donationUrl) {
-              void open(RELIVE_CONFIG.donationUrl);
+              void openUrl(RELIVE_CONFIG.donationUrl);
             }
           }}
           className="bg-white/10 cursor-pointer hover:bg-white/20 border border-white/20 text-white rounded-md backdrop-blur-md transition-colors duration-200 px-4 py-2 font-medium"

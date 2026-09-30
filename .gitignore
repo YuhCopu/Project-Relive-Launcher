@@ -24,3 +24,17 @@ dist-ssr
 *.sw?
 test/
 ~/
+# Secrets / local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+secrets.json
+
+# Rust / frontend build output
+src-tauri/target/
+**/target/

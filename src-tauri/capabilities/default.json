@@ -17,7 +17,6 @@
     "core:webview:allow-create-webview-window",
     "opener:allow-default-urls",
     "dialog:default",
-    "shell:default",
     "deep-link:default",
     "log:default",
     "notification:default"
